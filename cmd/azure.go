@@ -205,6 +205,7 @@ func replaceLink(filepath string) error {
 	if err != nil {
 		return fmt.Errorf("error reading file %s: %w", filepath, err)
 	}
+	contentString := string(content)
 	rx, err := regexp.Compile(fmt.Sprintf(`(%s)\/pages\/viewpage\.action\?pageId=(\d+)`, baseUrl))
 	if err != nil {
 		return fmt.Errorf("error creating regex: %w", err)
@@ -221,13 +222,16 @@ func replaceLink(filepath string) error {
 			fmt.Println("parts: ", parts)
 			if newPagePath, exists := pageIdToLink[parts[1]]; exists {
 				fmt.Println("new page path is: ", newPagePath)
-				err := os.WriteFile(filepath, []byte(strings.ReplaceAll(string(content), link, newPagePath)), 0)
-				if err != nil {
-					return fmt.Errorf("error writing file with link replacement: %w", err)
-				}
+
+				contentString = strings.ReplaceAll(contentString, link, newPagePath)
 			}
 		}
 
+	}
+
+	err = os.WriteFile(filepath, []byte(contentString), 0)
+	if err != nil {
+		return fmt.Errorf("error writing file with link replacement: %w", err)
 	}
 
 	return nil
