@@ -329,6 +329,7 @@ func downloadAttachmentsToLocalAndReplaceLinks(converted string, page confluence
 
 		// save image
 		imageName := fmt.Sprintf("%d-%s", rand.Int(), strings.Split(imageUrl.Path, "/")[len(strings.Split(imageUrl.Path, "/"))-1])
+		imageName = strings.ReplaceAll(imageName, " ", "_")
 		imageFile, err := os.Create(fmt.Sprintf("%s/%s", attachmentsFolder, imageName))
 		if err != nil {
 			return result, err
