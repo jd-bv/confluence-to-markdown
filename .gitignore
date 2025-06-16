@@ -1,0 +1,6 @@
+gopath
+.idea
+.DS_Store
+*.iml
+.secret
+
