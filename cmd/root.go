@@ -5,8 +5,9 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/spf13/viper"
 	"os"
+
+	"github.com/spf13/viper"
 
 	"github.com/spf13/cobra"
 )
@@ -14,6 +15,7 @@ import (
 var cfgFile string
 var username string
 var token string
+var additionalHeaders map[string]string
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
@@ -44,8 +46,9 @@ func init() {
 
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.cobra.yaml)")
 	rootCmd.PersistentFlags().StringVar(&token, "token", "", "atlassian token")
-	rootCmd.PersistentFlags().StringVar(&username, "user", "", "atlassian username")
+	// rootCmd.PersistentFlags().StringVar(&username, "user", "", "atlassian username")
 	_ = rootCmd.MarkPersistentFlagRequired("token")
+	rootCmd.PersistentFlags().StringToStringVar(&additionalHeaders, "header", nil, "additional headers for api call")
 	// Here you will define your flags and configuration settings.
 	// Cobra supports persistent flags, which, if defined here,
 	// will be global for your application.

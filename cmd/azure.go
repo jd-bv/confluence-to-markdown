@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -25,6 +26,7 @@ import (
 var baseUrl string
 var baseUrlWiki string
 var attachmentsFolder string
+var pageIdToLink map[string]string
 
 type promptContent struct {
 	errorMsg string
@@ -63,6 +65,8 @@ func promptGetInput(pc promptContent) string {
 	return result
 }
 
+var debug = false
+
 // azureCmd represents the azure command
 var azureCmd = &cobra.Command{
 	Use:        "azure <space>",
@@ -80,21 +84,30 @@ confluence-to-markdown azure --baseUrl https://mycompany.atlassian.net --user my
 		// get the url from args
 		space := args[0]
 
-		baseUrl, err := cmd.Flags().GetString("baseUrl")
-		baseUrlWiki = fmt.Sprintf("%s/wiki", baseUrl)
+		var err error
+		baseUrl, err = cmd.Flags().GetString("baseUrl")
+		baseUrlWiki = fmt.Sprintf("%s", baseUrl)
+		log.Println("base url: ", baseUrl)
 		cobra.CheckErr(err)
 		_, err = url.ParseRequestURI(baseUrlWiki)
 		cobra.CheckErr(err)
+
+		pageIdToLink = make(map[string]string)
 
 		// token, err := cmd.Flags().GetString("token")
 		// cobra.CheckErr(err)
 
 		// login details
-		if len(username) < 1 {
-			username = promptGetInput(promptContent{
-				label:    "Username",
-				errorMsg: "Invalid username",
-			})
+		// if len(username) < 1 {
+		// username = promptGetInput(promptContent{
+		// label:    "Username",
+		// errorMsg: "Invalid username",
+		// })
+		// }
+
+		if debug {
+			replaceLinks(space)
+			os.Exit(1)
 		}
 
 		// Create root output folder
@@ -102,7 +115,7 @@ confluence-to-markdown azure --baseUrl https://mycompany.atlassian.net --user my
 			log.Fatal(err)
 		}
 
-		attachmentsFolder = fmt.Sprintf("%s/.attachments", space)
+		attachmentsFolder = fmt.Sprintf("%s/__attachments", space)
 		// attachments
 		if err := os.Mkdir(attachmentsFolder, 0755); err != nil {
 			log.Fatal(err)
@@ -115,11 +128,20 @@ confluence-to-markdown azure --baseUrl https://mycompany.atlassian.net --user my
 
 		request, err := http.NewRequest("GET", fmt.Sprintf("%s/rest/api/space/%s", baseUrlWiki, space), nil)
 		cobra.CheckErr(err)
-		request.Header.Set("Content-Type", "application/json")
-		request.SetBasicAuth(username, token)
+		// request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json")
+		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+		if additionalHeaders != nil {
+			for k, v := range additionalHeaders {
+				request.Header.Set(k, v)
+			}
+		}
 
 		response, err := client.Do(request)
 		cobra.CheckErr(err)
+		if response.StatusCode != 200 {
+			log.Fatalf("HTTP error while fetching page: %d, \"%s\"", response.StatusCode, response.Status)
+		}
 
 		body, err := io.ReadAll(response.Body)
 		cobra.CheckErr(err)
@@ -130,6 +152,7 @@ confluence-to-markdown azure --baseUrl https://mycompany.atlassian.net --user my
 		}
 
 		handlePage(fmt.Sprintf("%s%s", baseUrlWiki, data.Expandable.Homepage), space)
+		replaceLinks(space)
 	},
 }
 
@@ -160,6 +183,56 @@ func makeAzureWikiFriendlyTitle(s string) string {
 	return s
 }
 
+func replaceLinks(dir string) {
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(path, fmt.Sprintf("%s/%s", dir, "__attachments")) {
+			return nil
+		}
+		fmt.Println(path, info.Size())
+		replaceLink(path)
+		return nil
+	})
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
+func replaceLink(filepath string) error {
+	content, err := os.ReadFile(filepath)
+	if err != nil {
+		return fmt.Errorf("error reading file %s: %w", filepath, err)
+	}
+	rx, err := regexp.Compile(fmt.Sprintf(`(%s)\/pages\/viewpage\.action\?pageId=(\d+)`, baseUrl))
+	if err != nil {
+		return fmt.Errorf("error creating regex: %w", err)
+	}
+
+	links := rx.FindAllString(string(content), -1)
+	fmt.Println("find all strings: ", links)
+
+	for _, link := range links {
+		fmt.Println("link: ", link)
+
+		parts := strings.Split(link, "?pageId=")
+		if len(parts) == 2 {
+			fmt.Println("parts: ", parts)
+			if newPagePath, exists := pageIdToLink[parts[1]]; exists {
+				fmt.Println("new page path is: ", newPagePath)
+				err := os.WriteFile(filepath, []byte(strings.ReplaceAll(string(content), link, newPagePath)), 0)
+				if err != nil {
+					return fmt.Errorf("error writing file with link replacement: %w", err)
+				}
+			}
+		}
+
+	}
+
+	return nil
+}
+
 func handlePage(u string, outputPath string) {
 	// get page
 	page, err := fetchPage(u)
@@ -184,14 +257,22 @@ func handlePage(u string, outputPath string) {
 
 	// find all attachments, and download them to local folder
 	converted, err = downloadAttachmentsToLocalAndReplaceLinks(converted, page)
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// write to file
 	parentPath := strings.Join(strings.Split(outputPath, "/")[:len(strings.Split(outputPath, "/"))-1], "/")
-	f, err := os.Create(fmt.Sprintf("%s/%s.md", parentPath, makeAzureWikiFriendlyTitle(page.Title)))
+	filename := makeAzureWikiFriendlyTitle(page.Title)
+	filePath := fmt.Sprintf("%s/%s.md", parentPath, filename)
+	f, err := os.Create(filePath)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer f.Close()
+
+	pageIdToLink[page.Id] = filename
+
 	_, err = f.WriteString(converted)
 	if err != nil {
 		log.Fatal(err)
@@ -205,18 +286,20 @@ func handlePage(u string, outputPath string) {
 }
 
 func downloadAttachmentsToLocalAndReplaceLinks(converted string, page confluence.Page) (result string, err error) {
-	rx, err := regexp.Compile(fmt.Sprintf(`(%s)?/wiki/download/attachments/(\d+)/([0-9a-zA-Z.\-_%%]+)\?api=v2`, baseUrl))
+	rx, err := regexp.Compile(fmt.Sprintf(`(%s)?\/download\/attachments(.*)api=v2`, baseUrl))
 	if err != nil {
 		return result, err
 	}
 	imageLinks := rx.FindAllString(converted, -1)
 	client := &http.Client{}
 	for _, imageLink := range imageLinks {
+		// log.Println("replacing image link...", imageLink)
 		// download image
 		normalizedImageLink := imageLink
 		if !strings.HasPrefix(normalizedImageLink, "http") {
 			normalizedImageLink = fmt.Sprintf("%s%s", baseUrl, normalizedImageLink)
 		}
+		// log.Println("normalized image link: ", normalizedImageLink, baseUrl)
 		imageUrl, err := url.ParseRequestURI(strings.TrimSpace(normalizedImageLink))
 		if err != nil {
 			return result, err
@@ -225,8 +308,15 @@ func downloadAttachmentsToLocalAndReplaceLinks(converted string, page confluence
 		if err != nil {
 			return result, err
 		}
-		imageRequest.Header.Set("Content-Type", "application/json")
-		imageRequest.SetBasicAuth(username, token)
+		// imageRequest.Header.Set("Content-Type", "application/json")
+		imageRequest.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+
+		if additionalHeaders != nil {
+			for k, v := range additionalHeaders {
+				imageRequest.Header.Set(k, v)
+			}
+		}
+		// imageRequest.SetBasicAuth(username, token)
 		imageResponse, err := client.Do(imageRequest)
 		if err != nil {
 			return result, err
@@ -252,7 +342,7 @@ func downloadAttachmentsToLocalAndReplaceLinks(converted string, page confluence
 		}
 
 		// replace image link
-		converted = strings.ReplaceAll(converted, imageLink, fmt.Sprintf("%s/%s", attachmentsFolder, imageName))
+		converted = strings.ReplaceAll(converted, imageLink, fmt.Sprintf("%s/%s", "__attachments", imageName))
 	}
 	return converted, nil
 }
@@ -272,11 +362,21 @@ func fetchPage(u string) (p confluence.Page, err error) {
 		return p, err
 	}
 
-	request.Header.Set("Content-Type", "application/json")
-	request.SetBasicAuth(username, token)
+	// request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
+	if additionalHeaders != nil {
+		for k, v := range additionalHeaders {
+			request.Header.Set(k, v)
+		}
+	}
+	// request.SetBasicAuth(username, token)
 	response, err := client.Do(request)
 	if err != nil {
 		return p, err
+	}
+	if response.StatusCode != 200 {
+		return p, errors.New(fmt.Sprintf("Fetch page failed: status %d, \"%s\"", response.StatusCode, response.Status))
 	}
 
 	body, err := io.ReadAll(response.Body)
