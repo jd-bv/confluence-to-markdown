@@ -17,7 +17,11 @@ import (
 	"regexp"
 	"strings"
 
-	md "github.com/JohannesKaufmann/html-to-markdown"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	mdconverter "github.com/JohannesKaufmann/html-to-markdown/v2/converter"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
+	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/table"
 	"github.com/jd-bv/confluence-to-markdown/confluence"
 	"github.com/manifoldco/promptui"
 	"github.com/spf13/cobra"
@@ -94,22 +98,6 @@ confluence-to-markdown azure --baseUrl https://mycompany.atlassian.net --user my
 
 		pageIdToLink = make(map[string]string)
 
-		// token, err := cmd.Flags().GetString("token")
-		// cobra.CheckErr(err)
-
-		// login details
-		// if len(username) < 1 {
-		// username = promptGetInput(promptContent{
-		// label:    "Username",
-		// errorMsg: "Invalid username",
-		// })
-		// }
-
-		if debug {
-			replaceLinks(space)
-			os.Exit(1)
-		}
-
 		// Create root output folder
 		if err := os.Mkdir(space, 0755); err != nil {
 			log.Fatal(err)
@@ -121,14 +109,10 @@ confluence-to-markdown azure --baseUrl https://mycompany.atlassian.net --user my
 			log.Fatal(err)
 		}
 
-		// get base from config
-		// get space name from input
-
 		client := &http.Client{}
 
 		request, err := http.NewRequest("GET", fmt.Sprintf("%s/rest/api/space/%s", baseUrlWiki, space), nil)
 		cobra.CheckErr(err)
-		// request.Header.Set("Content-Type", "application/json")
 		request.Header.Set("Accept", "application/json")
 		request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 		if additionalHeaders != nil {
@@ -253,7 +237,13 @@ func handlePage(u string, outputPath string) {
 	}
 
 	// Convert to md
-	converter := md.NewConverter("", true, nil)
+	converter := mdconverter.NewConverter(
+		converter.WithPlugins(
+			base.NewBasePlugin(),
+			commonmark.NewCommonmarkPlugin(),
+			table.NewTablePlugin(),
+		),
+	)
 	converted, err := converter.ConvertString(page.Body.ExportView.Value)
 	if err != nil {
 		log.Fatal(err)
@@ -297,13 +287,11 @@ func downloadAttachmentsToLocalAndReplaceLinks(converted string, page confluence
 	imageLinks := rx.FindAllString(converted, -1)
 	client := &http.Client{}
 	for _, imageLink := range imageLinks {
-		// log.Println("replacing image link...", imageLink)
 		// download image
 		normalizedImageLink := imageLink
 		if !strings.HasPrefix(normalizedImageLink, "http") {
 			normalizedImageLink = fmt.Sprintf("%s%s", baseUrl, normalizedImageLink)
 		}
-		// log.Println("normalized image link: ", normalizedImageLink, baseUrl)
 		imageUrl, err := url.ParseRequestURI(strings.TrimSpace(normalizedImageLink))
 		if err != nil {
 			return result, err
@@ -312,7 +300,6 @@ func downloadAttachmentsToLocalAndReplaceLinks(converted string, page confluence
 		if err != nil {
 			return result, err
 		}
-		// imageRequest.Header.Set("Content-Type", "application/json")
 		imageRequest.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 
 		if additionalHeaders != nil {
@@ -320,7 +307,6 @@ func downloadAttachmentsToLocalAndReplaceLinks(converted string, page confluence
 				imageRequest.Header.Set(k, v)
 			}
 		}
-		// imageRequest.SetBasicAuth(username, token)
 		imageResponse, err := client.Do(imageRequest)
 		if err != nil {
 			return result, err
@@ -367,7 +353,6 @@ func fetchPage(u string) (p confluence.Page, err error) {
 		return p, err
 	}
 
-	// request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("Authorization", fmt.Sprintf("Bearer %s", token))
 	if additionalHeaders != nil {
@@ -375,7 +360,6 @@ func fetchPage(u string) (p confluence.Page, err error) {
 			request.Header.Set(k, v)
 		}
 	}
-	// request.SetBasicAuth(username, token)
 	response, err := client.Do(request)
 	if err != nil {
 		return p, err
